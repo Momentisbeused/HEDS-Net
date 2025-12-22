@@ -22,9 +22,7 @@ def train_one_epoch(train_loader,
                     logger, 
                     config, 
                     scaler=None):
-    '''
-    train model for one epoch
-    '''
+  
     stime = time.time()
     model.train() 
  
@@ -39,21 +37,17 @@ def train_one_epoch(train_loader,
         if config.amp:
             with autocast():
                 output = model(images)
-                # 处理深度监督输出
                 if isinstance(output, tuple):
                     out, ds_features = output
-                    # 计算主损失
                     main_loss = criterion(out, targets)
                     
-                    # 计算深度监督损失
                     if hasattr(model.module, 'vmunet') and hasattr(model.module.vmunet, 'deep_supervision'):
-                        # 根据数据维度确定目标尺寸
-                        if len(targets.shape) == 5:  # 3D数据: (B, C, D, H, W)
-                            target_size_2d = (targets.shape[3], targets.shape[4])  # (H, W)
-                        elif len(targets.shape) == 4:  # 2D数据: (B, C, H, W)
-                            target_size_2d = (targets.shape[2], targets.shape[3])  # (H, W)
-                        elif len(targets.shape) == 3:  # Synapse数据: (B, H, W)
-                            target_size_2d = (targets.shape[1], targets.shape[2])  # (H, W)
+                        if len(targets.shape) == 5:  
+                            target_size_2d = (targets.shape[3], targets.shape[4])  
+                        elif len(targets.shape) == 4: 
+                            target_size_2d = (targets.shape[2], targets.shape[3]) 
+                        elif len(targets.shape) == 3:  
+                            target_size_2d = (targets.shape[1], targets.shape[2])  
                         else:
                             print(f"Warning: Unexpected targets shape: {targets.shape}")
                             target_size_2d = None
@@ -76,21 +70,17 @@ def train_one_epoch(train_loader,
             scaler.update()
         else:
             output = model(images)
-            # 处理深度监督输出
             if isinstance(output, tuple):
                 out, ds_features = output
-                # 计算主损失
                 main_loss = criterion(out, targets)
                 
-                # 计算深度监督损失
                 if hasattr(model.module, 'vmunet') and hasattr(model.module.vmunet, 'deep_supervision'):
-                    # 根据数据维度确定目标尺寸
-                    if len(targets.shape) == 5:  # 3D数据: (B, C, D, H, W)
-                        target_size_2d = (targets.shape[3], targets.shape[4])  # (H, W)
-                    elif len(targets.shape) == 4:  # 2D数据: (B, C, H, W)
-                        target_size_2d = (targets.shape[2], targets.shape[3])  # (H, W)
-                    elif len(targets.shape) == 3:  # Synapse数据: (B, H, W)
-                        target_size_2d = (targets.shape[1], targets.shape[2])  # (H, W)
+                    if len(targets.shape) == 5:  
+                        target_size_2d = (targets.shape[3], targets.shape[4])  
+                    elif len(targets.shape) == 4:  
+                        target_size_2d = (targets.shape[2], targets.shape[3])  
+                    elif len(targets.shape) == 3:  
+                        target_size_2d = (targets.shape[1], targets.shape[2]) 
                     else:
                         print(f"Warning: Unexpected targets shape: {targets.shape}")
                         target_size_2d = None
@@ -138,7 +128,6 @@ def val_one_epoch(test_datasets,
                     config,
                     test_save_path,
                     val_or_test=False):
-    # switch to evaluate mode
     stime = time.time()
     model.eval()
     with torch.no_grad():
