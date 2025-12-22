@@ -32,21 +32,17 @@ def train_one_epoch(train_loader,
 
         output = model(images)
         
-        # 处理深度监督输出
+       
         if isinstance(output, tuple):
             out, ds_features = output
-            # 计算主损失
             main_loss = criterion(out, targets)
             
-            # 计算深度监督损失
             if hasattr(model.vmunet, 'deep_supervision'):
-                # 先通过深度监督模块生成预测结果
                 ds_predictions = model.vmunet.deep_supervision(ds_features, target_size=targets.shape[2:])
                 ds_loss, ds_components = model.vmunet.deep_supervision.compute_loss(
                     ds_predictions, targets, criterion, epoch=epoch, total_epochs=config.epochs
                 )
-                # 总损失 = 主损失 + 深度监督损失
-                loss = main_loss + 0.1 * ds_loss  # 降低深度监督权重到0.1
+                loss = main_loss + 0.1 * ds_loss 
             else:
                 loss = main_loss
         else:
@@ -55,7 +51,7 @@ def train_one_epoch(train_loader,
 
         loss.backward()
         
-        # 梯度裁剪（防止训练不稳定）
+        
         if hasattr(config, 'grad_clip_norm') and config.grad_clip_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.grad_clip_norm)
         
@@ -73,7 +69,7 @@ def train_one_epoch(train_loader,
             print(log_info)
             logger.info(log_info)
     
-    # 只在scheduler存在时调用step（预热期间scheduler为None）
+   
     if scheduler is not None:
         scheduler.step()
     
@@ -86,7 +82,7 @@ def val_one_epoch(test_loader,
                     epoch, 
                     logger,
                     config):
-    # switch to evaluate mode
+    
     model.eval()
     preds = []
     gts = []
@@ -98,21 +94,21 @@ def val_one_epoch(test_loader,
 
             output = model(img)
             
-            # 处理深度监督输出
+            
             if isinstance(output, tuple):
                 out, ds_features = output
-                # 计算主损失
+               
                 main_loss = criterion(out, msk)
                 
-                # 计算深度监督损失
+                
                 if hasattr(model.vmunet, 'deep_supervision'):
-                    # 先通过深度监督模块生成预测结果
+                   
                     ds_predictions = model.vmunet.deep_supervision(ds_features, target_size=msk.shape[2:])
                     ds_loss, ds_components = model.vmunet.deep_supervision.compute_loss(
                         ds_predictions, msk, criterion, epoch=epoch, total_epochs=config.epochs
                     )
-                    # 总损失 = 主损失 + 深度监督损失
-                    loss = main_loss + 0.1 * ds_loss  # 降低深度监督权重到0.1
+                   
+                    loss = main_loss + 0.1 * ds_loss 
                 else:
                     loss = main_loss
             else:
@@ -126,7 +122,7 @@ def val_one_epoch(test_loader,
             out = out.squeeze(1).cpu().detach().numpy()
             preds.append(out) 
 
-    # 每个epoch都计算和打印指标
+    
     preds = np.array(preds).reshape(-1)
     gts = np.array(gts).reshape(-1)
 
@@ -142,19 +138,19 @@ def val_one_epoch(test_loader,
     f1_or_dsc = float(2 * TP) / float(2 * TP + FP + FN) if float(2 * TP + FP + FN) != 0 else 0
     miou = float(TP) / float(TP + FP + FN) if float(TP + FP + FN) != 0 else 0
 
-    # 计算更多指标
+   
     precision = float(TP) / float(TP + FP) if float(TP + FP) != 0 else 0
-    recall = sensitivity  # 召回率等于敏感度
+    recall = sensitivity  
     
-    # 每个epoch都在终端输出指标信息（单行格式）
+    
     log_info = f'val epoch: {epoch}, loss: {np.mean(loss_list):.4f}, miou: {miou}, f1_or_dsc: {f1_or_dsc}, accuracy: {accuracy}, \
             specificity: {specificity}, sensitivity: {sensitivity}, confusion_matrix: {confusion}'
     print(log_info)
     
-    # 记录到日志文件
+   
     logger.info(log_info)
     
-    # 返回loss和miou，用于保存最佳模型
+  
     return np.mean(loss_list), miou
 
 
@@ -164,7 +160,7 @@ def test_one_epoch(test_loader,
                     logger,
                     config,
                     test_data_name=None):
-    # switch to evaluate mode
+   
     model.eval()
     preds = []
     gts = []
@@ -176,10 +172,8 @@ def test_one_epoch(test_loader,
 
             output = model(img)
             
-            # 处理多输出（深度监督）
             if isinstance(output, tuple):
-                out = output[0]  # 使用主输出
-                # 测试阶段不计算深度监督损失
+                out = output[0]  
                 loss = criterion(out, msk)
             else:
                 out = output
@@ -188,7 +182,6 @@ def test_one_epoch(test_loader,
             loss_list.append(loss.item())
             msk = msk.squeeze(1).cpu().detach().numpy()
             gts.append(msk)
-            # out 已经是主输出，不需要再次检查 tuple
             out = out.squeeze(1).cpu().detach().numpy()
             preds.append(out) 
             if i % config.save_interval == 0:
