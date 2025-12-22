@@ -14,7 +14,7 @@ from models.vmunet.vmunet import VMUNet
 
 import os
 import sys
-os.environ["CUDA_VISIBLE_DEVICES"] = "0" # "0, 1, 2, 3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 from utils import *
 from configs.config_setting_synapse import setting_config
@@ -101,7 +101,6 @@ def main(config):
             load_ckpt_path=model_cfg['load_ckpt_path'],
             use_enhanced_skip=config.use_enhanced_skip,
             use_deep_supervision=config.use_deep_supervision,
-            use_ca_attention=config.use_ca_attention,
             use_hvst=config.use_hvst,
             use_esc=config.use_esc,
         )
@@ -178,7 +177,6 @@ def main(config):
         torch.cuda.empty_cache()
         train_sampler.set_epoch(epoch) if config.distributed else None
         
-        # 学习率预热
         if hasattr(config, 'warmup_epochs') and config.warmup_epochs > 0 and epoch <= config.warmup_epochs:
             warmup_factor = epoch / config.warmup_epochs
             for param_group in optimizer.param_groups:
@@ -192,7 +190,6 @@ def main(config):
                     param_group['lr'] = param_group['initial_lr']
             print(f'Warmup finished, restored to initial learning rates')
 
-        # 预热期间不使用scheduler
         use_scheduler = not (hasattr(config, 'warmup_epochs') and config.warmup_epochs > 0 and epoch <= config.warmup_epochs)
         
         loss = train_one_epoch(
