@@ -17,27 +17,17 @@ from medpy import metric
 
 
 def set_seed(seed):
-    # for hash
     os.environ['PYTHONHASHSEED'] = str(seed)
-    # for python and numpy
     random.seed(seed)
     np.random.seed(seed)
-    # for cpu gpu
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    # for cudnn
     cudnn.benchmark = False
     cudnn.deterministic = True
 
 
 def get_logger(name, log_dir):
-    '''
-    Args:
-        name(str): name of logger
-        log_dir(str): path of log
-    '''
-
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
@@ -76,7 +66,6 @@ def log_config_info(config, logger):
 def get_optimizer(config, model):
     assert config.opt in ['Adadelta', 'Adagrad', 'Adam', 'AdamW', 'Adamax', 'ASGD', 'RMSprop', 'Rprop', 'SGD'], 'Unsupported optimizer!'
 
-    # HVST分离学习率：为不同组件设置不同学习率和权重衰减
     if hasattr(config, 'use_hvst') and config.use_hvst:
         vss_params = []
         local_params = []
@@ -95,7 +84,6 @@ def get_optimizer(config, model):
             else:
                 other_params.append(param)
         
-        # 构建参数组（不同学习率和weight decay）
         param_groups = [
             {'params': vss_params, 'lr': config.lr * 0.1, 'weight_decay': config.weight_decay * 2.0, 'name': 'vss_branch'},
             {'params': local_params, 'lr': config.lr * 2.0, 'weight_decay': config.weight_decay * 0.5, 'name': 'local_branch'},
@@ -104,10 +92,10 @@ def get_optimizer(config, model):
         ]
         
         print(f'HVST分离学习率策略:')
-        print(f'  VSS分支: lr={config.lr * 0.1:.6f}, wd={config.weight_decay * 2.0:.4f} ({len(vss_params)} params)')
-        print(f'  多尺度分支: lr={config.lr * 2.0:.6f}, wd={config.weight_decay * 0.5:.4f} ({len(local_params)} params)')
-        print(f'  融合层: lr={config.lr * 1.5:.6f}, wd={config.weight_decay:.4f} ({len(fusion_params)} params)')
-        print(f'  其他参数: lr={config.lr:.6f}, wd={config.weight_decay:.4f} ({len(other_params)} params)')
+        print(f'  lr={config.lr * 0.1:.6f}, wd={config.weight_decay * 2.0:.4f} ({len(vss_params)} params)')
+        print(f'  lr={config.lr * 2.0:.6f}, wd={config.weight_decay * 0.5:.4f} ({len(local_params)} params)')
+        print(f'  lr={config.lr * 1.5:.6f}, wd={config.weight_decay:.4f} ({len(fusion_params)} params)')
+        print(f'  lr={config.lr:.6f}, wd={config.weight_decay:.4f} ({len(other_params)} params)')
     else:
         param_groups = model.parameters()
 
@@ -261,31 +249,27 @@ def get_scheduler(config, optimizer):
 
 
 def save_imgs(img, msk, msk_pred, i, save_path, datasets, threshold=0.5, test_data_name=None):
-    # 处理图像数据
     img = img.squeeze(0).permute(1,2,0).detach().cpu().numpy()
     img = img / 255. if img.max() > 1.1 else img
     
-    # 根据数据集处理掩码
     if datasets == 'retinal':
-        msk = np.squeeze(msk)  # 移除所有大小为1的维度
+        msk = np.squeeze(msk)  
         msk_pred = np.squeeze(msk_pred)
     else:
-        att_msk = np.squeeze(msk_pred)  # 移除所有大小为1的维度
+        att_msk = np.squeeze(msk_pred)  
         msk = np.where(np.squeeze(msk) > 0.5, 1, 0)
         msk_pred = np.where(np.squeeze(msk_pred) > threshold, 1, 0)
 
-    # 获取图像尺寸以确定画布大小
+  
     img_h, img_w = img.shape[:2]
     fig_width = img_w / 100.0
     fig_height = (img_h * 4) / 100.0
     
-    # 设置画布大小
+  
     fig, axes = plt.subplots(4, 1, figsize=(fig_width, fig_height))
     
-    # 无间距设置
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
     
-    # 移除所有边框和刻度
     for ax in axes:
         ax.set_xticks([])
         ax.set_yticks([])
@@ -294,24 +278,19 @@ def save_imgs(img, msk, msk_pred, i, save_path, datasets, threshold=0.5, test_da
         ax.spines['bottom'].set_visible(False)
         ax.spines['left'].set_visible(False)
     
-    # 原图
     axes[0].imshow(img, aspect='auto')
     axes[0].axis('off')
     
-    # Ground Truth 掩码
     axes[1].imshow(msk, cmap='gray', aspect='auto')
     axes[1].axis('off')
     
-    # 预测掩码
     axes[2].imshow(msk_pred, cmap='gray', aspect='auto')
     axes[2].axis('off')
     
-    # 注意力图谱叠加到原图上
     axes[3].imshow(img, aspect='auto')
     axes[3].imshow(att_msk, cmap='jet', alpha=0.5, aspect='auto')
     axes[3].axis('off')
 
-    # 保存图片
     if test_data_name is not None:
         save_path = save_path + test_data_name + '_'
     plt.savefig(save_path + str(i) + '.png', bbox_inches='tight', pad_inches=0, dpi=100, facecolor='black')
@@ -516,12 +495,12 @@ class myNormalize:
     
 
 
-from thop import profile		 ## 导入thop模块
+from thop import profile		 
 def cal_params_flops(model, size, logger):
     input = torch.randn(1, 3, size, size).cuda()
     flops, params = profile(model, inputs=(input,))
-    print('flops',flops/1e9)			## 打印计算量
-    print('params',params/1e6)			## 打印参数量
+    print('flops',flops/1e9)			
+    print('params',params/1e6)			
 
     total = sum(p.numel() for p in model.parameters())
     print("Total params: %.2fM" % (total/1e6))
@@ -560,9 +539,8 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256],
             net.eval()
             with torch.no_grad():
                 outputs = net(input)
-                # 处理深度监督输出
                 if isinstance(outputs, tuple):
-                    out = outputs[0]  # 使用主输出
+                    out = outputs[0]  
                 else:
                     out = outputs
                 out = torch.argmax(torch.softmax(out, dim=1), dim=1).squeeze(0)
