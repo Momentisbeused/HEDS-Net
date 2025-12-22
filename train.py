@@ -77,11 +77,10 @@ def main(config):
         depths_decoder=model_cfg['depths_decoder'],
         drop_path_rate=model_cfg['drop_path_rate'],
         load_ckpt_path=model_cfg['load_ckpt_path'],
-        use_enhanced_skip=config.use_enhanced_skip,  # 使用配置中的开关
-        use_deep_supervision=config.use_deep_supervision,  # 深度监督开关
-        use_ca_attention=config.use_ca_attention,  # 坐标注意力开关
-        use_hvst=config.use_hvst,  # HVST编码器开关
-        use_esc=config.use_esc,  # ESC模块开关
+        use_enhanced_skip=config.use_enhanced_skip,  
+        use_deep_supervision=config.use_deep_supervision,  
+        use_hvst=config.use_hvst,  
+        use_esc=config.use_esc,  
     )
     model.load_from()
     model = model.cuda()
@@ -103,17 +102,10 @@ def main(config):
 
     print('#----------Set other params----------#')
     min_loss = 999
-    max_miou = 0  # 添加：基于mIoU保存最佳模型（学术规范）
+    max_miou = 0  
     start_epoch = 1
     min_epoch = 1
-    best_epoch = 1  # 记录最佳mIoU的epoch
-    
-    # 保存指定epoch的权重（用于对比实验）
-    save_epochs = [5, 8, 11, 14, 17, 20]  # 需要保存权重的epoch列表（在20个epoch中均匀分布）
-    epoch_save_dir = '/root/autodl-tmp/VM-UNet/other'
-    os.makedirs(epoch_save_dir, exist_ok=True)
-    print(f'将在以下epoch保存权重: {save_epochs}')
-    
+    best_epoch = 1 
 
     if config.only_test_and_save_figs:
         checkpoint = torch.load(config.best_ckpt_path, map_location=torch.device('cpu'))
@@ -131,38 +123,30 @@ def main(config):
         return
 
 
-
-
-    # 恢复训练选项：如果设置了resume_training=False，则从头开始训练
-    resume_training = getattr(config, 'resume_training', True)  # 默认允许恢复
+    resume_training = getattr(config, 'resume_training', True) 
     
     if os.path.exists(resume_model) and resume_training:
         print('#----------Resume Model and Other params----------#')
-        # 先清理GPU缓存，确保内存充足
         torch.cuda.empty_cache()
         
         checkpoint = torch.load(resume_model, map_location=torch.device('cpu'))
         
-        # 先提取需要的信息
         saved_epoch = checkpoint['epoch']
         min_loss_val = checkpoint['min_loss']
         min_epoch_val = checkpoint['min_epoch']
         loss_val = checkpoint['loss']
         max_miou = checkpoint.get('max_miou', 0)
         best_epoch = checkpoint.get('best_epoch', min_epoch_val)
-        
-        # 加载模型、优化器和调度器状态
+    
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        
-        # 清理checkpoint占用的内存，并清理GPU缓存
+    
         del checkpoint
         import gc
         gc.collect()
         torch.cuda.empty_cache()
         
-        # 设置恢复的训练状态
         start_epoch += saved_epoch
         min_loss = min_loss_val
         min_epoch = min_epoch_val
@@ -172,7 +156,6 @@ def main(config):
         logger.info(log_info)
     elif os.path.exists(resume_model) and not resume_training:
         print('#----------Skipping Resume: Starting Fresh Training----------#')
-        # 如果不想恢复，可以删除或重命名旧checkpoint
         import shutil
         backup_path = resume_model + '.backup'
         if os.path.exists(resume_model):
@@ -191,26 +174,20 @@ def main(config):
 
         torch.cuda.empty_cache()
         
-        # 学习率预热（前5个epoch）
         if hasattr(config, 'warmup_epochs') and config.warmup_epochs > 0 and epoch <= config.warmup_epochs:
             warmup_factor = epoch / config.warmup_epochs
             for param_group in optimizer.param_groups:
-                # 保存原始学习率（第一次预热时）
                 if epoch == 1 and 'initial_lr' not in param_group:
                     param_group['initial_lr'] = param_group['lr']
-                # 应用预热因子
                 param_group['lr'] = param_group['initial_lr'] * warmup_factor
             print(f'Warmup epoch {epoch}/{config.warmup_epochs}: lr_factor={warmup_factor:.4f}')
         elif hasattr(config, 'warmup_epochs') and config.warmup_epochs > 0 and epoch == config.warmup_epochs + 1:
-            # 预热结束，恢复原始学习率
             for param_group in optimizer.param_groups:
                 if 'initial_lr' in param_group:
                     param_group['lr'] = param_group['initial_lr']
             print(f'Warmup finished, restored to initial learning rates')
         
-        # ========== 动态训练策略 ==========
-        
-        # 1. HVST渐进式训练控制
+    
         if config.use_hvst:
             progress = (epoch - 1) / config.epochs
             for layer in model.vmunet.layers:
@@ -218,17 +195,14 @@ def main(config):
                     if hasattr(block, 'set_training_progress'):
                         block.set_training_progress(progress, epoch)
         
-        # 2. 动态梯度裁剪（70 epoch后减小，提高精度）
         if hasattr(config, 'grad_clip_norm') and config.grad_clip_norm > 0:
             if epoch <= 70:
                 current_grad_clip = config.grad_clip_norm  # 前期：1.0
             else:
-                # 后期线性递减到0.5（70→100: 1.0→0.5）
                 decay_progress = (epoch - 70) / (config.epochs - 70)
                 current_grad_clip = config.grad_clip_norm * (1.0 - 0.5 * decay_progress)
             config.grad_clip_norm = current_grad_clip
         
-        # 3. 动态权重衰减（后期增强，防止过拟合）
         if epoch >= 70:
             decay_boost = 1.0 + 0.5 * ((epoch - 70) / (config.epochs - 70))  # 70→100: 1.0→1.5x
             for param_group in optimizer.param_groups:
@@ -236,7 +210,6 @@ def main(config):
                     param_group['initial_weight_decay'] = param_group['weight_decay']
                 param_group['weight_decay'] = param_group['initial_weight_decay'] * decay_boost
 
-        # 预热期间不使用scheduler
         use_scheduler = not (hasattr(config, 'warmup_epochs') and config.warmup_epochs > 0 and epoch <= config.warmup_epochs)
         
         step = train_one_epoch(
@@ -252,7 +225,6 @@ def main(config):
             writer
         )
 
-        # 验证并获取loss和mIoU
         loss, miou = val_one_epoch(
                 val_loader,
                 model,
@@ -262,19 +234,16 @@ def main(config):
                 config
             )
         
-        # 保存最佳模型（基于mIoU，符合学术规范）
         if miou > max_miou:
             torch.save(model.state_dict(), os.path.join(checkpoint_dir, 'best.pth'))
             max_miou = miou
             best_epoch = epoch
             logger.info(f'New best model: epoch {epoch}, mIoU: {miou:.6f}')
         
-        # 同时记录最小loss（用于对比）
         if loss < min_loss:
             min_loss = loss
             min_epoch = epoch
         
-        # 在指定epoch保存权重（用于对比实验）
         if epoch in save_epochs:
             epoch_save_path = os.path.join(epoch_save_dir, f'epoch_{epoch}_{config.datasets}_miou_{miou:.4f}.pth')
             torch.save(model.state_dict(), epoch_save_path)
@@ -288,21 +257,13 @@ def main(config):
                 'max_miou': max_miou,
                 'best_epoch': best_epoch,
                 'loss': loss,
-                'miou': miou,  # 保存当前miou，便于后续恢复
+                'miou': miou, 
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
             }, os.path.join(checkpoint_dir, 'latest.pth'))
         
-        # 在指定epoch保存权重到可视化目录（用于生成对比图）
-        visualization_epochs = [60, 70, 80, 90, 95]
-        if epoch in visualization_epochs:
-            vis_save_dir = '/root/autodl-tmp/VM-UNet/results/visual'
-            os.makedirs(vis_save_dir, exist_ok=True)
-            vis_save_path = os.path.join(vis_save_dir, f'epoch_{epoch}_miou_{miou:.4f}.pth')
-            torch.save(model.state_dict(), vis_save_path)
-            logger.info(f'保存可视化用权重: {vis_save_path} (epoch {epoch}, mIoU: {miou:.4f})') 
-
+        
     if os.path.exists(os.path.join(checkpoint_dir, 'best.pth')):
         print('#----------Testing----------#')
         best_weight = torch.load(config.work_dir + 'checkpoints/best.pth', map_location=torch.device('cpu'))
