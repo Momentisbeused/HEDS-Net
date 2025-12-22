@@ -4,49 +4,37 @@ from utils import *
 from datetime import datetime
 
 class setting_config:
-    """
-    the config of training setting.
-    """
-
-    # ========== 模块开关配置 ==========
-    # Phase 1: Enhanced Skip Connection
+   
+   
     use_enhanced_skip = True
     
-    # Phase 2: Deep Supervision
+    
     use_deep_supervision = True
+   
+    use_hvst = True 
     
-    # Phase 3: Coordinate Attention
-    use_ca_attention = True
+   
+    use_esc = True  
     
-    # Phase 4: HVST Encoder (Progressive Hybrid VSS-Transformer)
-    use_hvst = True  # True: 使用渐进式HVST, False: 使用原始VSS
     
-    # Phase 5: ESC Module (Enhanced Skip Connection)
-    use_esc = True  # True: 使用ESC模块, False: 使用原始跳跃连接
-    
-    # ========== HVST训练优化配置 ==========
-    # 学习率预热：前5个epoch使用逐渐增加的学习率，帮助多尺度分支稳定训练
     warmup_epochs = 5
-    # 梯度裁剪：防止训练不稳定（设置为0则禁用）
+   
     grad_clip_norm = 1.0
     
-    # ========== 深度监督配置 ==========
-    # 监督层权重: 层次化分布，深层强监督，浅层弱监督
-    deep_supervision_weights = [0.3, 0.2, 0.1]  # 降低轻量辅助监督权重
-    # 深度监督总权重: 适度权重，避免过度干扰
+   
+    deep_supervision_weights = [0.3, 0.2, 0.1]  
+   
     deep_supervision_weight = 0.1
     model_config = {
         'num_classes': 1, 
         'input_channels': 3, 
-        # ----- VM-UNet ----- #
         'depths': [2,2,2,2],
         'depths_decoder': [2,2,2,1],
         'drop_path_rate': 0.2,
-        'load_ckpt_path': './pre_trained_weights/vmamba_small_e238_ema.pth',
-        # ----- 模块开关 ----- #
+        'load_ckpt_path': './pre_trained_weights/1.pth',
+       
         'use_enhanced_skip': use_enhanced_skip,
         'use_deep_supervision': use_deep_supervision,
-        'use_ca_attention': use_ca_attention,
         'use_hvst': use_hvst,
         'use_esc': use_esc,
     }
@@ -62,8 +50,7 @@ class setting_config:
         raise Exception('datasets in not right!')
 
     
-    # ========== 损失函数配置 ==========
-    # 基础损失函数选择
+   
     criterion = BceDiceLoss(wb=1, wd=1)
 
     pretrained_path = './pre_trained/'
@@ -79,15 +66,9 @@ class setting_config:
     rank = None
     amp = False
     gpu_id = '0'
-    batch_size = 32  # 轻量辅助监督，可以支持更大的批处理大小
-    epochs = 20  # 训练20个epoch，保存6个指定epoch的权重用于对比
+    batch_size = 32  
+   
 
-    # 训练配置选项
-    resume_training = False  # 设置为True时，从checkpoint恢复训练；False则从头开始
-    
-    # 恢复训练：指定之前的工作目录
-    # 如果是新训练，注释掉下面这行，使用动态生成的work_dir
-    # work_dir = 'results/vmunet_isic17_Friday_31_October_2025_15h_59m_05s/'
     work_dir = 'results/vmunet_' + datasets + '_' + datetime.now().strftime('%A_%d_%B_%Y_%Hh_%Mm_%Ss') + '/'
 
     print_interval = 20
