@@ -7,30 +7,19 @@ from datetime import datetime
 
 
 class setting_config:
-    """
-    the config of training setting.
-    """
-    # ========== 模块开关配置 ==========
-    # Phase 1: Enhanced Skip Connection
+   
+   
     use_enhanced_skip = True
     
-    # Phase 2: Deep Supervision
     use_deep_supervision = True
     
-    # Phase 3: Coordinate Attention
-    use_ca_attention = True
+    use_hvst = True 
     
-    # Phase 4: HVST Encoder (Progressive Hybrid VSS-Transformer)
-    use_hvst = True  # True: 使用渐进式HVST, False: 使用原始VSS
+    use_esc = True  
     
-    # Phase 5: ESC Module (Enhanced Skip Connection)
-    use_esc = True  # True: 使用ESC模块, False: 使用原始跳跃连接
-    
-    # ========== HVST训练优化配置 ==========
     warmup_epochs = 5
     grad_clip_norm = 1.0
     
-    # ========== 深度监督配置 ==========
     deep_supervision_weights = [0.3, 0.2, 0.1]
     deep_supervision_weight = 0.1
     
@@ -38,15 +27,12 @@ class setting_config:
     model_config = {
         'num_classes': 9, 
         'input_channels': 3, 
-        # ----- VM-UNet ----- #
         'depths': [2,2,2,2],
         'depths_decoder': [2,2,2,1],
         'drop_path_rate': 0.2,
-        'load_ckpt_path': './pre_trained_weights/vmamba_small_e238_ema.pth',
-        # ----- 模块开关 ----- #
+        'load_ckpt_path': './pre_trained_weights/1.pth',
         'use_enhanced_skip': use_enhanced_skip,
         'use_deep_supervision': use_deep_supervision,
-        'use_ca_attention': use_ca_attention,
         'use_hvst': use_hvst,
         'use_esc': use_esc,
     }
