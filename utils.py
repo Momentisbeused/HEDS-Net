@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 import torchvision.transforms.functional as TF
+from torchvision.transforms import InterpolationMode
 import numpy as np
 import os
 import math
@@ -28,11 +29,14 @@ def set_seed(seed):
 
 
 def get_logger(name, log_dir):
+    
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
+    if logger.handlers:
+        return logger
 
     info_name = os.path.join(log_dir, '{}.info.log'.format(name))
     info_handler = logging.handlers.TimedRotatingFileHandler(info_name,
@@ -64,125 +68,17 @@ def log_config_info(config, logger):
 
 
 def get_optimizer(config, model):
-    assert config.opt in ['Adadelta', 'Adagrad', 'Adam', 'AdamW', 'Adamax', 'ASGD', 'RMSprop', 'Rprop', 'SGD'], 'Unsupported optimizer!'
-
-    if hasattr(config, 'use_hvst') and config.use_hvst:
-        vss_params = []
-        local_params = []
-        fusion_params = []
-        other_params = []
-        
-        for name, param in model.named_parameters():
-            if not param.requires_grad:
-                continue
-            if 'vss_branch' in name:
-                vss_params.append(param)
-            elif 'local_branch' in name:
-                local_params.append(param)
-            elif 'fusion' in name:
-                fusion_params.append(param)
-            else:
-                other_params.append(param)
-        
-        param_groups = [
-            {'params': vss_params, 'lr': config.lr * 0.1, 'weight_decay': config.weight_decay * 2.0, 'name': 'vss_branch'},
-            {'params': local_params, 'lr': config.lr * 2.0, 'weight_decay': config.weight_decay * 0.5, 'name': 'local_branch'},
-            {'params': fusion_params, 'lr': config.lr * 1.5, 'weight_decay': config.weight_decay, 'name': 'fusion'},
-            {'params': other_params, 'lr': config.lr, 'weight_decay': config.weight_decay, 'name': 'other'},
-        ]
-        
-        print(f'HVST分离学习率策略:')
-        print(f'  lr={config.lr * 0.1:.6f}, wd={config.weight_decay * 2.0:.4f} ({len(vss_params)} params)')
-        print(f'  lr={config.lr * 2.0:.6f}, wd={config.weight_decay * 0.5:.4f} ({len(local_params)} params)')
-        print(f'  lr={config.lr * 1.5:.6f}, wd={config.weight_decay:.4f} ({len(fusion_params)} params)')
-        print(f'  lr={config.lr:.6f}, wd={config.weight_decay:.4f} ({len(other_params)} params)')
-    else:
-        param_groups = model.parameters()
-
-    if config.opt == 'Adadelta':
-        return torch.optim.Adadelta(
-            param_groups,
-            lr = config.lr,
-            rho = config.rho,
-            eps = config.eps,
-            weight_decay = config.weight_decay
-        )
-    elif config.opt == 'Adagrad':
-        return torch.optim.Adagrad(
-            param_groups,
-            lr = config.lr,
-            lr_decay = config.lr_decay,
-            eps = config.eps,
-            weight_decay = config.weight_decay
-        )
-    elif config.opt == 'Adam':
-        return torch.optim.Adam(
-            param_groups,
-            lr = config.lr,
-            betas = config.betas,
-            eps = config.eps,
-            weight_decay = config.weight_decay,
-            amsgrad = config.amsgrad
-        )
-    elif config.opt == 'AdamW':
-        return torch.optim.AdamW(
-            param_groups,
-            lr = config.lr,
-            betas = config.betas,
-            eps = config.eps,
-            weight_decay = config.weight_decay,
-            amsgrad = config.amsgrad
-        )
-    elif config.opt == 'Adamax':
-        return torch.optim.Adamax(
-            param_groups,
-            lr = config.lr,
-            betas = config.betas,
-            eps = config.eps,
-            weight_decay = config.weight_decay
-        )
-    elif config.opt == 'ASGD':
-        return torch.optim.ASGD(
-            param_groups,
-            lr = config.lr,
-            lambd = config.lambd,
-            alpha  = config.alpha,
-            t0 = config.t0,
-            weight_decay = config.weight_decay
-        )
-    elif config.opt == 'RMSprop':
-        return torch.optim.RMSprop(
-            param_groups,
-            lr = config.lr,
-            momentum = config.momentum,
-            alpha = config.alpha,
-            eps = config.eps,
-            centered = config.centered,
-            weight_decay = config.weight_decay
-        )
-    elif config.opt == 'Rprop':
-        return torch.optim.Rprop(
-            param_groups,
-            lr = config.lr,
-            etas = config.etas,
-            step_sizes = config.step_sizes,
-        )
-    elif config.opt == 'SGD':
-        return torch.optim.SGD(
-            param_groups,
-            lr = config.lr,
-            momentum = config.momentum,
-            weight_decay = config.weight_decay,
-            dampening = config.dampening,
-            nesterov = config.nesterov
-        )
-    else: # default opt is SGD
-        return torch.optim.SGD(
-            model.parameters(),
-            lr = 0.01,
-            momentum = 0.9,
-            weight_decay = 0.05,
-        )
+    params = [p for p in model.parameters() if p.requires_grad]
+    if getattr(config, "opt", "AdamW") != "AdamW":
+        raise ValueError("The reported experiments use AdamW only.")
+    return torch.optim.AdamW(
+        params,
+        lr=config.lr,
+        betas=config.betas,
+        eps=config.eps,
+        weight_decay=config.weight_decay,
+        amsgrad=config.amsgrad,
+    )
 
 
 def get_scheduler(config, optimizer):
@@ -251,25 +147,23 @@ def get_scheduler(config, optimizer):
 def save_imgs(img, msk, msk_pred, i, save_path, datasets, threshold=0.5, test_data_name=None):
     img = img.squeeze(0).permute(1,2,0).detach().cpu().numpy()
     img = img / 255. if img.max() > 1.1 else img
-    
+
     if datasets == 'retinal':
-        msk = np.squeeze(msk)  
+        msk = np.squeeze(msk)
         msk_pred = np.squeeze(msk_pred)
     else:
-        att_msk = np.squeeze(msk_pred)  
+        att_msk = np.squeeze(msk_pred)
         msk = np.where(np.squeeze(msk) > 0.5, 1, 0)
         msk_pred = np.where(np.squeeze(msk_pred) > threshold, 1, 0)
 
-  
     img_h, img_w = img.shape[:2]
     fig_width = img_w / 100.0
     fig_height = (img_h * 4) / 100.0
-    
-  
+
     fig, axes = plt.subplots(4, 1, figsize=(fig_width, fig_height))
-    
+
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
-    
+
     for ax in axes:
         ax.set_xticks([])
         ax.set_yticks([])
@@ -277,16 +171,16 @@ def save_imgs(img, msk, msk_pred, i, save_path, datasets, threshold=0.5, test_da
         ax.spines['right'].set_visible(False)
         ax.spines['bottom'].set_visible(False)
         ax.spines['left'].set_visible(False)
-    
+
     axes[0].imshow(img, aspect='auto')
     axes[0].axis('off')
-    
+
     axes[1].imshow(msk, cmap='gray', aspect='auto')
     axes[1].axis('off')
-    
+
     axes[2].imshow(msk_pred, cmap='gray', aspect='auto')
     axes[2].axis('off')
-    
+
     axes[3].imshow(img, aspect='auto')
     axes[3].imshow(att_msk, cmap='jet', alpha=0.5, aspect='auto')
     axes[3].axis('off')
@@ -297,36 +191,6 @@ def save_imgs(img, msk, msk_pred, i, save_path, datasets, threshold=0.5, test_da
     plt.close()
     
 
-
-class BCELoss(nn.Module):
-    def __init__(self):
-        super(BCELoss, self).__init__()
-        self.bceloss = nn.BCELoss()
-
-    def forward(self, pred, target):
-        size = pred.size(0)
-        pred_ = pred.view(size, -1)
-        target_ = target.view(size, -1)
-
-        return self.bceloss(pred_, target_)
-
-
-class DiceLoss(nn.Module):
-    def __init__(self):
-        super(DiceLoss, self).__init__()
-
-    def forward(self, pred, target):
-        smooth = 1
-        size = pred.size(0)
-
-        pred_ = pred.view(size, -1)
-        target_ = target.view(size, -1)
-        intersection = pred_ * target_
-        dice_score = (2 * intersection.sum(1) + smooth)/(pred_.sum(1) + target_.sum(1) + smooth)
-        dice_loss = 1 - dice_score.sum()/size
-
-        return dice_loss
-    
 
 class nDiceLoss(nn.Module):
     def __init__(self, n_classes):
@@ -381,33 +245,38 @@ class CeDiceLoss(nn.Module):
         return loss
 
 
+class BinaryDiceLoss(nn.Module):
+    """Soft Dice on sigmoid(logits); use with BCE-with-logits for binary segmentation."""
+
+    def __init__(self, smooth=1.0):
+        super().__init__()
+        self.smooth = smooth
+
+    def forward(self, logits, target):
+        prob = torch.sigmoid(logits)
+        target = target.float()
+        if target.dim() == 3:
+            target = target.unsqueeze(1)
+        prob = prob.reshape(prob.size(0), -1)
+        target = target.reshape(target.size(0), -1)
+        intersection = prob * target
+        dice = (2.0 * intersection.sum(1) + self.smooth) / (prob.sum(1) + target.sum(1) + self.smooth)
+        return 1.0 - dice.mean()
+
+
 class BceDiceLoss(nn.Module):
-    def __init__(self, wb=1, wd=1):
-        super(BceDiceLoss, self).__init__()
-        self.bce = BCELoss()
-        self.dice = DiceLoss()
+    def __init__(self, wb=1.0, wd=1.0):
+        super().__init__()
+        self.bce = nn.BCEWithLogitsLoss()
+        self.dice = BinaryDiceLoss()
         self.wb = wb
         self.wd = wd
 
-    def forward(self, pred, target):
-        bceloss = self.bce(pred, target)
-        diceloss = self.dice(pred, target)
-
-        loss = self.wd * diceloss + self.wb * bceloss
-        return loss
-    
-
-class GT_BceDiceLoss(nn.Module):
-    def __init__(self, wb=1, wd=1):
-        super(GT_BceDiceLoss, self).__init__()
-        self.bcedice = BceDiceLoss(wb, wd)
-
-    def forward(self, gt_pre, out, target):
-        bcediceloss = self.bcedice(out, target)
-        gt_pre5, gt_pre4, gt_pre3, gt_pre2, gt_pre1 = gt_pre
-        gt_loss = self.bcedice(gt_pre5, target) * 0.1 + self.bcedice(gt_pre4, target) * 0.2 + self.bcedice(gt_pre3, target) * 0.3 + self.bcedice(gt_pre2, target) * 0.4 + self.bcedice(gt_pre1, target) * 0.5
-        return bcediceloss + gt_loss
-
+    def forward(self, logits, target):
+        if target.dim() == 3:
+            target = target.unsqueeze(1)
+        target = target.float()
+        return self.wb * self.bce(logits, target) + self.wd * self.dice(logits, target)
 
 
 class myToTensor:
@@ -422,9 +291,12 @@ class myResize:
     def __init__(self, size_h=256, size_w=256):
         self.size_h = size_h
         self.size_w = size_w
+
     def __call__(self, data):
         image, mask = data
-        return TF.resize(image, [self.size_h, self.size_w]), TF.resize(mask, [self.size_h, self.size_w])
+        image = TF.resize(image, [self.size_h, self.size_w], interpolation=InterpolationMode.BILINEAR)
+        mask = TF.resize(mask, [self.size_h, self.size_w], interpolation=InterpolationMode.NEAREST)
+        return image, mask
        
 
 class myRandomHorizontalFlip:
@@ -446,65 +318,33 @@ class myRandomVerticalFlip:
 
 
 class myRandomRotation:
-    def __init__(self, p=0.5, degree=[0,360]):
-        self.angle = random.uniform(degree[0], degree[1])
+    def __init__(self, p=0.5, degree=(0, 360)):
+        self.degree = degree
         self.p = p
+
     def __call__(self, data):
         image, mask = data
-        if random.random() < self.p: return TF.rotate(image,self.angle), TF.rotate(mask,self.angle)
-        else: return image, mask 
+        if random.random() >= self.p:
+            return image, mask
+        angle = random.uniform(self.degree[0], self.degree[1])
+        image = TF.rotate(image, angle, interpolation=InterpolationMode.BILINEAR)
+        mask = TF.rotate(mask, angle, interpolation=InterpolationMode.NEAREST)
+        return image, mask 
 
 
-class myNormalize:
-    def __init__(self, data_name, train=True):
-        if data_name == 'isic18':
-            if train:
-                self.mean = 157.561
-                self.std = 26.706
-            else:
-                self.mean = 149.034
-                self.std = 32.022
-        elif data_name == 'isic17':
-            if train:
-                self.mean = 159.922
-                self.std = 28.871
-            else:
-                self.mean = 148.429
-                self.std = 25.748
-        elif data_name == 'isic18_82':
-            if train:
-                self.mean = 156.2899
-                self.std = 26.5457
-            else:
-                self.mean = 149.8485
-                self.std = 35.3346
-        elif data_name == 'Kvasir-SEG':
-            if train:
-                self.mean = 97.528
-                self.std = 58.630
-            else:
-                self.mean = 97.430
-                self.std = 58.925
-            
+class myNormalizeUnit01:
+    """Scale image to ~[0,1]: same rule for train/val/test (divide by 255 if needed)."""
+
     def __call__(self, data):
         img, msk = data
-        img_normalized = (img-self.mean)/self.std
-        img_normalized = ((img_normalized - np.min(img_normalized)) 
-                            / (np.max(img_normalized)-np.min(img_normalized))) * 255.
-        return img_normalized, msk
-    
-
-
-from thop import profile		 
-def cal_params_flops(model, size, logger):
-    input = torch.randn(1, 3, size, size).cuda()
-    flops, params = profile(model, inputs=(input,))
-    print('flops',flops/1e9)			
-    print('params',params/1e6)			
-
-    total = sum(p.numel() for p in model.parameters())
-    print("Total params: %.2fM" % (total/1e6))
-    logger.info(f'flops: {flops/1e9}, params: {params/1e6}, Total params: : {total/1e6:.4f}')
+        img = np.asarray(img, dtype=np.float32)
+        if img.size == 0:
+            return img, msk
+        if float(img.max()) > 1.0 + 1e-6:
+            img = img / 255.0
+        else:
+            img = np.clip(img, 0.0, 1.0)
+        return img, msk
 
 
 
@@ -512,16 +352,16 @@ def cal_params_flops(model, size, logger):
 
 
 def calculate_metric_percase(pred, gt):
-    pred[pred > 0] = 1
-    gt[gt > 0] = 1
-    if pred.sum() > 0 and gt.sum()>0:
+    pred = pred.astype(bool)
+    gt = gt.astype(bool)
+
+    if pred.sum() > 0 and gt.sum() > 0:
         dice = metric.binary.dc(pred, gt)
         hd95 = metric.binary.hd95(pred, gt)
         return dice, hd95
-    elif pred.sum() > 0 and gt.sum()==0:
-        return 1, 0
-    else:
-        return 0, 0
+    if pred.sum() == 0 and gt.sum() == 0:
+        return 1.0, 0.0
+    return 0.0, 0.0
 
 
 
@@ -534,13 +374,13 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256],
             slice = image[ind, :, :]
             x, y = slice.shape[0], slice.shape[1]
             if x != patch_size[0] or y != patch_size[1]:
-                slice = zoom(slice, (patch_size[0] / x, patch_size[1] / y), order=3)  # previous using 0
+                slice = zoom(slice, (patch_size[0] / x, patch_size[1] / y), order=3)
             input = torch.from_numpy(slice).unsqueeze(0).unsqueeze(0).float().cuda()
             net.eval()
             with torch.no_grad():
                 outputs = net(input)
                 if isinstance(outputs, tuple):
-                    out = outputs[0]  
+                    out = outputs[0]
                 else:
                     out = outputs
                 out = torch.argmax(torch.softmax(out, dim=1), dim=1).squeeze(0)
@@ -571,5 +411,4 @@ def test_single_volume(image, label, net, classes, patch_size=[256, 256],
         sitk.WriteImage(prd_itk, test_save_path + '/'+ case + "_pred.nii.gz")
         sitk.WriteImage(img_itk, test_save_path + '/'+ case + "_img.nii.gz")
         sitk.WriteImage(lab_itk, test_save_path + '/'+ case + "_gt.nii.gz")
-        # cv2.imwrite(test_save_path + '/'+case + '.png', prediction*255)
     return metric_list
