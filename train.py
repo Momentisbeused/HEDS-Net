@@ -2,7 +2,8 @@ import torch
 from torch.utils.data import DataLoader
 from datasets.dataset import NPY_datasets
 from tensorboardX import SummaryWriter
-from models.vmunet.vmunet import VMUNet
+from models.vmunet import VMUNet
+
 
 from engine import *
 import os
