@@ -6,10 +6,23 @@ from functools import partial
 from typing import Callable
 from timm.models.layers import DropPath
 
-try:
-    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
-except:
-    selective_scan_fn = None
+
+def _resolve_selective_scan_fn():
+    try:
+        from mamba_ssm.ops.selective_scan_interface import selective_scan_fn as _fn
+
+        return _fn
+    except Exception:
+        pass
+    try:
+        from selective_scan import selective_scan_fn as _fn
+
+        return _fn
+    except Exception:
+        return None
+
+
+selective_scan_fn = _resolve_selective_scan_fn()
 
 
 class SEModule(nn.Module):
@@ -62,46 +75,43 @@ class MultiScaleLocalBranch(nn.Module):
     def __init__(self, dim):
         super().__init__()
         self.dim = dim
-        
+
         self.conv_d1 = DepthwiseSeparableConv(dim, dim, kernel_size=3, dilation=1)
         self.conv_d2 = DepthwiseSeparableConv(dim, dim, kernel_size=3, dilation=2)
         self.conv_d4 = DepthwiseSeparableConv(dim, dim, kernel_size=3, dilation=4)
-        
+
+        self.se = SEModule(dim * 3, reduction=4)
+
         self.fusion = nn.Conv2d(dim * 3, dim, kernel_size=1, bias=False)
-        nn.init.zeros_(self.fusion.weight)  
-        
-    
+        nn.init.zeros_(self.fusion.weight)
+
         num_groups = 8
         while dim % num_groups != 0 and num_groups > 1:
             num_groups -= 1
         self.norm = nn.GroupNorm(num_groups=num_groups, num_channels=dim)
     
     def forward(self, x):
-        
         B, H, W, C = x.shape
-        
-       
+
         x_c = x.permute(0, 3, 1, 2).contiguous()
-        
-        
-        feat_d1 = self.conv_d1(x_c)  # (B, C, H, W)
-        feat_d2 = self.conv_d2(x_c)  # (B, C, H, W)
-        feat_d4 = self.conv_d4(x_c)  # (B, C, H, W)
-        
-       
-        multi_scale = torch.cat([feat_d1, feat_d2, feat_d4], dim=1) 
-        multi_scale = self.se(multi_scale)  
-        
-        fused = self.fusion(multi_scale) 
+
+        feat_d1 = self.conv_d1(x_c)
+        feat_d2 = self.conv_d2(x_c)
+        feat_d4 = self.conv_d4(x_c)
+
+        multi_scale = torch.cat([feat_d1, feat_d2, feat_d4], dim=1)
+
+        multi_scale = self.se(multi_scale)
+
+        fused = self.fusion(multi_scale)
         fused = self.norm(fused)
-        
-        out = fused.permute(0, 2, 3, 1).contiguous() 
-        
+
+        out = fused.permute(0, 2, 3, 1).contiguous()
+
         return out
 
 
 class VSSBranch(nn.Module):
-    
     def __init__(self, d_model, d_state=16, d_conv=3, expand=2, dt_rank="auto",
                  dt_min=0.001, dt_max=0.1, dt_init="random", dt_scale=1.0,
                  dt_init_floor=1e-4, dropout=0., conv_bias=True, bias=False,
@@ -120,12 +130,13 @@ class VSSBranch(nn.Module):
                                 bias=conv_bias, kernel_size=d_conv, padding=(d_conv - 1) // 2, **factory_kwargs)
         self.act = nn.SiLU()
 
+        
         x_proj = [
             nn.Linear(self.d_inner, (self.dt_rank + self.d_state * 2), bias=False, **factory_kwargs)
             for _ in range(4)
         ]
         self.x_proj_weight = nn.Parameter(torch.stack([t.weight for t in x_proj], dim=0))
-        
+
         dt_projs = []
         for _ in range(4):
             dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True, **factory_kwargs)
@@ -176,11 +187,36 @@ class VSSBranch(nn.Module):
         As = -torch.exp(self.A_logs.float()).view(-1, self.d_state)
         dt_projs_bias = self.dt_projs_bias.float().view(-1)
 
-        if selective_scan_fn is not None:
-            out_y = selective_scan_fn(xs, dts, As, Bs, Cs, Ds, z=None,
-                delta_bias=dt_projs_bias, delta_softplus=True, return_last_state=False).view(B, K, -1, L)
-        else:
-            out_y = xs.view(B, K, -1, L)
+        scan_fn = selective_scan_fn
+        if scan_fn is None:
+            raise RuntimeError(
+                "HVST/VSS requires selective_scan_fn: install `mamba_ssm` (same as VM-UNet/VMamba) "
+                "or add the `selective_scan` fallback used by SS2D.forward_corev1 in vmamba.py."
+            )
+        try:
+            out_y = scan_fn(
+                xs,
+                dts,
+                As,
+                Bs,
+                Cs,
+                Ds,
+                z=None,
+                delta_bias=dt_projs_bias,
+                delta_softplus=True,
+                return_last_state=False,
+            ).view(B, K, -1, L)
+        except TypeError:
+            out_y = scan_fn(
+                xs,
+                dts,
+                As,
+                Bs,
+                Cs,
+                Ds,
+                delta_bias=dt_projs_bias,
+                delta_softplus=True,
+            ).view(B, K, -1, L)
 
         inv_y = torch.flip(out_y[:, 2:4], dims=[-1]).view(B, 2, -1, L)
         wh_y = torch.transpose(out_y[:, 1].view(B, -1, W, H), dim0=2, dim1=3).contiguous().view(B, -1, L)
@@ -205,34 +241,20 @@ class VSSBranch(nn.Module):
 
 
 class SmoothProgressiveFusion(nn.Module):
-   
-    def __init__(self, dim):
+
+    def __init__(self, max_local_weight=0.6):
         super().__init__()
-        self.local_weight = nn.Parameter(torch.tensor(0.0))
-        self.register_buffer('max_weight', torch.tensor(0.0))
-    
+        self.max_local_weight = float(max_local_weight)
+        self.register_buffer("local_weight", torch.tensor(0.0))
+
     def set_progress(self, progress):
-        if progress < 0.3:
-            t = progress / 0.3
-            max_w = 0.1 * (1 - math.cos(t * math.pi / 2))
-        elif progress < 0.5:
-            t = (progress - 0.3) / 0.2
-            max_w = 0.1 + 0.2 * (1 - math.cos(t * math.pi / 2))
-        elif progress < 0.8:
-            t = (progress - 0.5) / 0.3
-            max_w = 0.3 + 0.2 * (1 - math.cos(t * math.pi / 2))
-        else:
-            t = (progress - 0.8) / 0.2
-            max_w = 0.5 + 0.1 * (1 - math.cos(t * math.pi / 2))
-        
-        self.max_weight.fill_(max_w)
-    
+        progress = min(max(float(progress), 0.0), 1.0)
+        weight = self.max_local_weight * 0.5 * (1.0 - math.cos(math.pi * progress))
+        self.local_weight.fill_(weight)
+
     def forward(self, vss_feat, local_feat):
-        w_local = torch.clamp(torch.sigmoid(self.local_weight), max=self.max_weight.item())
-        w_vss = 1.0 - w_local
-        
-        fused = w_vss * vss_feat + w_local * local_feat
-        return fused
+        w_local = self.local_weight.to(dtype=vss_feat.dtype, device=vss_feat.device)
+        return (1.0 - w_local) * vss_feat + w_local * local_feat
 
 
 class ProgressiveHVSTBlock(nn.Module):
@@ -247,33 +269,35 @@ class ProgressiveHVSTBlock(nn.Module):
     ):
         super().__init__()
         
+       
         self.norm1 = norm_layer(hidden_dim)
-        
+          # VSSLayer-only kwargs (not passed to VSSBranch)
+        kwargs.pop("window_size", None)
+        kwargs.pop("num_heads", None)
         self.vss_branch = VSSBranch(
-            d_model=hidden_dim, 
-            dropout=attn_drop_rate, 
-            d_state=d_state, 
-            **kwargs
+            d_model=hidden_dim,
+            dropout=attn_drop_rate,
+            d_state=d_state,
+            **kwargs,
         )
         
         self.local_branch = MultiScaleLocalBranch(hidden_dim)
-        
-        self.fusion = SmoothProgressiveFusion(hidden_dim)
-        
+
+        self.fusion = SmoothProgressiveFusion()
+
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         
-       
     def set_training_progress(self, progress, epoch):
-        
+
         self.fusion.set_progress(progress)
     
     def forward(self, input: torch.Tensor):
-        
+       
         x = self.norm1(input)
-        
-        
-        vss_out = self.vss_branch(x)       
-        local_out = self.local_branch(x)   
+
+        vss_out = self.vss_branch(x)
+        local_out = self.local_branch(x)
+
         fused = self.fusion(vss_out, local_out)
-        
+
         return input + self.drop_path(fused)
