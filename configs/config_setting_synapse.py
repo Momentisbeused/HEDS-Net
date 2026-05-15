@@ -4,25 +4,12 @@ from datasets.dataset import *
 from utils import *
 
 from datetime import datetime
-
+import ml_collections
 
 class setting_config:
-   
-   
-    use_enhanced_skip = True
-    
-    use_deep_supervision = True
-    
-    use_hvst = True 
-    
-    use_esc = True  
-    
-    warmup_epochs = 5
-    grad_clip_norm = 1.0
-    
-    deep_supervision_weights = [0.3, 0.2, 0.1]
-    deep_supervision_weight = 0.1
-    
+    """
+    the config of training setting.
+    """
     network = 'vmunet' 
     model_config = {
         'num_classes': 9, 
@@ -31,10 +18,6 @@ class setting_config:
         'depths_decoder': [2,2,2,1],
         'drop_path_rate': 0.2,
         'load_ckpt_path': './pre_trained_weights/1.pth',
-        'use_enhanced_skip': use_enhanced_skip,
-        'use_deep_supervision': use_deep_supervision,
-        'use_hvst': use_hvst,
-        'use_esc': use_esc,
     }
     datasets_name = 'synapse' 
     input_size_h = 224
@@ -47,7 +30,7 @@ class setting_config:
     else:
         raise Exception('datasets in not right!')
     
-    pretrained_path = '' # if using pretrained, please enter the path of weights
+    pretrained_path = ''
     num_classes = 9
     loss_weight = [1, 1]
     criterion = CeDiceLoss(num_classes, loss_weight)
